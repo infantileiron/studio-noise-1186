@@ -44,6 +44,7 @@ CREATE TABLE diagnostics (
   fingerprint CHAR(64) NOT NULL,
   snapshot JSON NOT NULL,
   result JSON,
+  publication JSON,
   reviewer_id INT,
   decision VARCHAR(500),
   reviewed_at TIMESTAMP NULL,
@@ -52,6 +53,35 @@ CREATE TABLE diagnostics (
   INDEX (state, id),
   FOREIGN KEY (method_id) REFERENCES methods(id),
   FOREIGN KEY (owner_id) REFERENCES accounts(id),
+  FOREIGN KEY (reviewer_id) REFERENCES accounts(id)
+);
+CREATE TABLE intakes (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  intake_key VARCHAR(64) UNIQUE NOT NULL,
+  source_studio VARCHAR(48) NOT NULL,
+  title VARCHAR(80) NOT NULL,
+  owner_id INT NOT NULL,
+  method_id INT,
+  method_version VARCHAR(32) NOT NULL,
+  algorithm VARCHAR(48) NOT NULL,
+  fingerprint CHAR(64) NOT NULL,
+  original JSON NOT NULL,
+  claim JSON NOT NULL,
+  state ENUM('queued','complete','failed') NOT NULL DEFAULT 'queued',
+  outcome ENUM('supported','coefficient_mismatch','missing_samples','incomputable','unsupported_algorithm') NULL,
+  result JSON,
+  conflicts JSON,
+  evidence JSON,
+  publication JSON,
+  attempts INT NOT NULL DEFAULT 0,
+  reviewer_id INT,
+  decision VARCHAR(500),
+  reviewed_at TIMESTAMP NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  finished_at TIMESTAMP NULL,
+  INDEX (state, id),
+  FOREIGN KEY (owner_id) REFERENCES accounts(id),
+  FOREIGN KEY (method_id) REFERENCES methods(id),
   FOREIGN KEY (reviewer_id) REFERENCES accounts(id)
 );
 CREATE TABLE audit (

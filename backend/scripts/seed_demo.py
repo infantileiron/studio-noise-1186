@@ -1,5 +1,7 @@
 from src.config.runtime import database
-from src.utils.documents import encode
+from src.services.correlation import calculate
+from src.services.intakes import local_conflicts
+from src.utils.documents import encode, fingerprint
 from src.utils.security import password_hash
 
 WINDOWS = [
@@ -45,12 +47,71 @@ def seed():
         for version, title, predictor, controls, note in METHODS:
             cursor.execute('''INSERT INTO methods(version,title,predictor,controls,note) VALUES (%s,%s,%s,%s,%s)
                               ON DUPLICATE KEY UPDATE id=id''', (version, title, predictor, encode(controls), note))
+        _seed_intakes(cursor)
         summary = {}
-        for table, keys in [('accounts', 'email'), ('sessions', 'code'), ('readings', 'session_id,reference'), ('methods', 'version')]:
+        for table, keys in [('accounts', 'email'), ('sessions', 'code'), ('readings', 'session_id,reference'),
+                            ('methods', 'version'), ('intakes', 'intake_key')]:
             cursor.execute(f'SELECT {keys} FROM {table} ORDER BY {keys}')
             rows = cursor.fetchall()
             summary[table] = {'count': len(rows), 'keys': rows}
         print(encode(summary))
+
+
+def _samples(cursor):
+    cursor.execute('''SELECT s.code AS session, s.band, r.reference, r.hvac, r.position, r.traffic,
+                             CAST(r.noise AS DOUBLE) AS noise
+                      FROM readings r JOIN sessions s ON s.id=r.session_id
+                      ORDER BY s.code, r.reference''')
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def _claim(rows):
+    sample = [{'session_id': row['session'], 'code': row['session'], 'band': row['band'],
+               'reference': row['reference'], 'hvac': row['hvac'], 'position': row['position'],
+               'traffic': row['traffic'], 'noise': row['noise']} for row in rows]
+    _, result = calculate({'algorithm': 'residual-pearson-v1',
+                           'method': {'version': 'TRF-01', 'predictor': 'traffic',
+                                      'controls': ['band', 'hvac', 'position']},
+                           'readings': sample})
+    return {'n': len(rows), 'raw': round(result['raw'], 6), 'partial': round(result['partial'], 6)}
+
+
+def _seed_intakes(cursor):
+    rows = _samples(cursor)
+    if not rows:
+        return
+    method = {'version': 'TRF-01', 'predictor': 'traffic', 'controls': ['band', 'hvac', 'position']}
+    # One intake whose samples and coefficients reproduce the original conclusion, and one whose
+    # coefficients drifted, so the workflow shows both "supported" and "coefficient_mismatch".
+    full = rows
+    half = rows[:36]
+    # Both studios logged the same 60-second sample once; the reading differs, so the retained
+    # intake carries the conflict while the local reading stays untouched.
+    shared = [dict(row) for row in full]
+    shared[0]['noise'] = round(shared[0]['noise'] + 0.6, 2)
+    drifted = {**_claim(half), 'partial': round(_claim(half)['partial'] + 0.083, 6)}
+    documents = [
+        {'intake_key': 'OUT-1123-01', 'source_studio': 'B 棚 · 内间', 'title': 'B 棚车流与底噪 · 11 月来件',
+         'method': method, 'algorithm': 'residual-pearson-v1', 'claim': _claim(shared), 'readings': shared},
+        {'intake_key': 'OUT-1123-02', 'source_studio': 'B 棚 · 内间', 'title': 'B 棚底噪 · 系数待对稿',
+         'method': method, 'algorithm': 'residual-pearson-v1', 'claim': drifted, 'readings': half},
+        {'intake_key': 'OUT-1102-07', 'source_studio': 'B 棚 · 内间', 'title': 'B 棚底噪 · 旧版记录',
+         'algorithm': 'pearson-control-v0'},
+    ]
+    cursor.execute('SELECT id FROM accounts WHERE email=%s', ('analyst@demo.local',))
+    owner = cursor.fetchone()['id']
+    for document in documents:
+        cursor.execute('SELECT id FROM intakes WHERE intake_key=%s', (document['intake_key'],))
+        if cursor.fetchone():
+            continue
+        conflicts = local_conflicts(cursor, document.get('readings') or [])
+        cursor.execute('''INSERT INTO intakes(intake_key, source_studio, title, owner_id, method_id,
+                            method_version, algorithm, fingerprint, original, claim, conflicts)
+                          VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                       (document['intake_key'], document['source_studio'], document['title'], owner,
+                        None, (document.get('method') or {}).get('version', ''),
+                        document.get('algorithm') or '', fingerprint(document),
+                        encode(document), encode(document.get('claim')), encode(conflicts)))
 
 
 if __name__ == '__main__':

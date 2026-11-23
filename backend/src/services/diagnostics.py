@@ -47,7 +47,7 @@ def list_runs(account):
     columns = RUN_COLUMNS.replace('d.result,', 'NULL AS result,')
     with database() as cursor:
         cursor.execute('SELECT ' + columns + ' ' + RUN_FROM + scope + ' ORDER BY d.id DESC LIMIT 100')
-        return cursor.fetchall()
+        return [decode_json(row, 'publication') for row in cursor.fetchall()]
 
 
 def get_run(identifier, account, snapshot=False):
@@ -58,19 +58,31 @@ def get_run(identifier, account, snapshot=False):
         row = cursor.fetchone()
     if row is None:
         raise HTTPException(404, '找不到可阅诊断单')
-    return decode_json(row, 'result', *(['snapshot'] if snapshot else []))
+    return decode_json(row, 'result', 'publication', *(['snapshot'] if snapshot else []))
 
 
 def publish(identifier, text, account):
     with database() as cursor:
-        cursor.execute('SELECT state, reviewed_at FROM diagnostics WHERE id=%s FOR UPDATE', (identifier,))
+        cursor.execute('''SELECT state, reviewed_at, fingerprint, method_id, result
+                          FROM diagnostics WHERE id=%s FOR UPDATE''', (identifier,))
         row = cursor.fetchone()
         if row is None:
             raise HTTPException(404, '找不到诊断单')
         if row['state'] != 'complete' or row['reviewed_at']:
             raise HTTPException(409, '仅可发布已算完且未发布的诊断')
-        cursor.execute('''UPDATE diagnostics SET decision=%s, reviewer_id=%s, reviewed_at=CURRENT_TIMESTAMP
-                          WHERE id=%s''', (text, account['id'], identifier))
+        cursor.execute('SELECT version FROM methods WHERE id=%s', (row['method_id'],))
+        version = cursor.fetchone()['version']
+        result = decode_json({'result': row['result']}, 'result')['result'] or {}
+        cursor.execute('''UPDATE diagnostics SET decision=%s, reviewer_id=%s, reviewed_at=CURRENT_TIMESTAMP,
+                            publication=%s WHERE id=%s''',
+                       (text, account['id'],
+                        encode({'kind': 'diagnostic',
+                                'evidence_version': {'method_version': version, 'algorithm': ALGORITHM,
+                                                     'document_fingerprint': row['fingerprint']},
+                                'recompute': {'outcome': 'complete',
+                                              'recomputed': {key: result.get(key) for key in
+                                                             ('n', 'raw', 'partial', 'absolute_drop', 'warnings')}}}),
+                        identifier))
         audit(cursor, account['id'], 'diagnostic.publish', str(identifier))
     return get_run(identifier, account)
 

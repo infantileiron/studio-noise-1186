@@ -37,4 +37,14 @@ class Control(StrEnum):
     session = 'session'
 
 
+class IntakeOutcome(StrEnum):
+    supported = 'supported'
+    coefficient_mismatch = 'coefficient_mismatch'
+    missing_samples = 'missing_samples'
+    incomputable = 'incomputable'
+    unsupported_algorithm = 'unsupported_algorithm'
+
+
+ALGORITHM = 'residual-pearson-v1'
+COEFFICIENT_TOLERANCE = 0.0005
 HVAC_RANK = {setting.value: rank for rank, setting in enumerate(HVAC)}

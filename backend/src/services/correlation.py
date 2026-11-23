@@ -1,8 +1,6 @@
 import numpy as np
 
-from src.constants.labels import HVAC_RANK
-
-ALGORITHM = 'residual-pearson-v1'
+from src.constants.labels import ALGORITHM, HVAC_RANK
 
 
 def pearson(x, y):

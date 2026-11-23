@@ -1,9 +1,10 @@
-export async function request(path, {body, raw = false} = {}) {
+export async function request(path, {body, raw = false, method} = {}) {
   const token = sessionStorage.getItem('studio.token');
   const headers = token ? {Authorization: `Bearer ${token}`} : {};
   if (body) headers['Content-Type'] = 'application/json';
+  const verb = method ?? (body ? 'POST' : 'GET');
   const response = await fetch(`/api${path}`, {
-    method: body ? 'POST' : 'GET', headers, body: body ? JSON.stringify(body) : undefined,
+    method: verb, headers, body: body ? JSON.stringify(body) : undefined,
   });
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));

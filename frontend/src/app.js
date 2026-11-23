@@ -4,6 +4,7 @@ import {shell} from './components/shell.js';
 import {poll} from './hooks/poll.js';
 import {calendar} from './pages/calendar.js';
 import {diagnostics} from './pages/diagnostics.js';
+import {intake} from './pages/intake.js';
 import {login} from './pages/login.js';
 import {methods} from './pages/methods.js';
 import {readings} from './pages/readings.js';
@@ -15,7 +16,7 @@ import {save} from './utils/download.js';
 import {esc} from './utils/format.js';
 
 const app = document.querySelector('#app');
-const renderers = {calendar, readings, methods, diagnostics, retest};
+const renderers = {calendar, readings, methods, diagnostics, intake, retest};
 let notice = '';
 let stopPoll = () => {};
 let revision = 0;
@@ -34,14 +35,15 @@ async function show() {
   if (!state.account) { render(); return; }
   const {key, id} = location();
   try {
-    const detail = id && ['diagnostics', 'retest'].includes(key) ? await request(`/diagnostics/${id}`) : null;
+    const resource = key === 'intake' ? 'intakes' : 'diagnostics';
+    const detail = id && ['diagnostics', 'retest', 'intake'].includes(key) ? await request(`/${resource}/${id}`) : null;
     if (revision !== current) return;
     state.detail = detail;
     render();
     if (detail?.state === 'queued') {
       stopPoll = poll(async () => {
         try {
-          const updated = await request(`/diagnostics/${detail.id}`);
+          const updated = await request(`/${resource}/${detail.id}`);
           if (revision !== current || updated.state === 'queued') return;
           await refresh();
           if (revision !== current) return;
@@ -84,13 +86,18 @@ app.addEventListener('submit', async event => {
     if (resource === 'publish') {
       await request(`/diagnostics/${state.detail.id}/publish`, {body: Object.fromEntries(form)});
       notice = '复测清单已发布，观察员现在可以查看。';
+    } else if (resource === 'retest-intake') {
+      await request(`/intakes/${state.detail.id}/retest`, {body: Object.fromEntries(form)});
+      notice = '来件复测安排已发布，观察员现在可以查看。';
     } else {
       const body = payload[resource](form);
       if (resource === 'diagnostics' && !body.session_ids.length) throw new Error('至少选择一个时段');
       const record = await request('/' + resource, {body});
-      notice = {sessions:'录音时段已保存。', readings:'声测已保存。', methods:'变量版本已保存。', diagnostics:'诊断已提交。'}[resource];
+      notice = {sessions:'录音时段已保存。', readings:'声测已保存。', methods:'变量版本已保存。', diagnostics:'诊断已提交。',
+        intakes: record.duplicate ? '同号来件已存在，显示已保留的原件。' : '来件已提交复算。'}[resource];
       await refresh();
       if (resource === 'diagnostics') { window.location.hash = `diagnostics/${record.id}`; return; }
+      if (resource === 'intakes') { window.location.hash = `intake/${record.id}`; return; }
       await show();
       return;
     }
@@ -116,7 +123,7 @@ app.addEventListener('change', event => {
   }
 });
 app.addEventListener('click', async event => {
-  const element = event.target.closest('[data-demo],[data-filter],[data-logout],[data-download],[data-retry]');
+  const element = event.target.closest('[data-demo],[data-filter],[data-logout],[data-download],[data-download-intake],[data-retry],[data-retry-intake]');
   if (!element) return;
   if (element.dataset.demo) {
     const form = app.querySelector('form');
@@ -130,6 +137,20 @@ app.addEventListener('click', async event => {
   if (element.hasAttribute('data-download')) {
     try { await save(await request(`/diagnostics/${state.detail.id}/export`, {raw: true})); }
     catch (error) { notice = error.message; render(); }
+  }
+  if (element.hasAttribute('data-download-intake')) {
+    try { await save(await request(`/intakes/${state.detail.id}/export`, {raw: true})); }
+    catch (error) { notice = error.message; render(); }
+  }
+  if (element.hasAttribute('data-retry-intake')) {
+    try {
+      element.disabled = true;
+      const run = await request(`/intakes/${state.detail.id}/retry`, {method: 'POST'});
+      state.detail = run;
+      notice = '已重新排队复算，原件未改动。';
+      await refresh();
+      await show();
+    } catch (error) { notice = error.message; render(); }
   }
 });
 window.addEventListener('hashchange', () => { notice = ''; show(); window.scrollTo(0, 0); });
